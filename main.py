@@ -82,7 +82,6 @@ retriever = vectorstore.as_retriever(
 
 # ====================== LLM & AGENTS ======================
 # ====================== LLM & AGENTS ======================
-# GROQ_API_KEY = "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"   # ← Colle ta clé ici
 
 crew_llm = LLM(
     model="groq/llama-3.3-70b-versatile",
