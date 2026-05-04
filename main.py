@@ -450,7 +450,6 @@ def extract_full_analysis(text: str) -> Dict[str, Any]:
                     analysis[key] = value
 
     return analysis
-
 # ====================== POST-PROCESSING ======================
 def strict_post_processing(data: Dict[str, Any], transcription: str, audio_duration: float) -> Dict[str, Any]:
     text = transcription.lower()
