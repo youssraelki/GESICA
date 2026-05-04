@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any
 
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
@@ -40,7 +41,7 @@ class ProcessResponse(BaseModel):
 # ====================== CONFIGURATION ======================
 PDF_DIRECTORY = "DocumentsRag"
 FAISS_INDEX_PATH = "faiss_index"
-WHISPER_MODEL_SIZE = "tiny"          # tu peux passer à "tiny" pour plus de vitesse
+WHISPER_MODEL_SIZE = "small"          # tu peux passer à "tiny" pour plus de vitesse
 EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
 
 # ====================== CHARGEMENT AU STARTUP ======================
@@ -80,12 +81,71 @@ retriever = vectorstore.as_retriever(
 )
 
 # ====================== LLM & AGENTS ======================
+# ====================== LLM & AGENTS ======================
+GROQ_API_KEY = "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"   # ← Colle ta clé ici
+
 crew_llm = LLM(
     model="groq/llama-3.3-70b-versatile",
     base_url="https://api.groq.com/openai/v1",
-    api_key=os.getenv("GROQ_API_KEY"),
+    api_key=GROQ_API_KEY,
     temperature=0.1,
 )
+ROLE_ET_PIPELINE_ARM = """1. Le rôle de l’ARM
+L’ARM (Assistant de Régulation Médicale) est la première personne qui répond aux appels du 15. 
+Il joue un rôle essentiel dans la gestion des urgences. Il filtre les appels, sécurise la situation et prépare la décision médicale.
+
+Rôles principaux :
+- Décrocher rapidement
+- Localiser précisément l’appelant
+- Comprendre la situation
+- Évaluer l’urgence
+- Transmettre au médecin régulateur
+- Engager des moyens si nécessaire
+
+2. Le pipeline de traitement d’un appel
+
+Étape 1 : Réception
+Objectifs : rassurer l’appelant et obtenir les informations essentielles rapidement.
+Exemple : Une personne appelle pour un malaise → l’ARM demande immédiatement l’adresse exacte et le numéro de téléphone.
+
+Étape 2 : Priorisation
+Classification par l’ARM :
+- P0 : urgence vitale immédiate (ex : arrêt cardiaque, détresse respiratoire aiguë)
+- P1 : urgence grave (ex : douleur thoracique, AVC suspecté)
+- P2 : urgence relative
+- P3 : non urgent
+
+Exemple : Une personne inconsciente est classée P0 immédiatement.
+
+Étape 3 : Diagnostic médical
+Le médecin régulateur prend le relais et affine l’analyse en posant des questions ciblées sur les symptômes.
+
+Étape 4 : Décision
+- R1 : SMUR
+- R2 : Ambulance
+- R3 : Médecin de garde / proximité
+- R4 : Conseil médical seul
+
+Étape 5 : Action
+L’ARM exécute la décision : envoi des secours, coordination, suivi et maintien en ligne si nécessaire.
+
+3. Types de questions posées par l’ARM
+A. Localisation : Où êtes-vous exactement ?
+B. Identification : Qui appelle ? Quel est le numéro ?
+C. Motif : Que se passe-t-il ?
+D. Gravité : La personne est-elle consciente ? Respire-t-elle normalement ?
+E. Contexte : Antécédents médicaux ? Âge ? Traitements en cours ?
+
+4. Actions en parallèle
+- Déclenchement rapide des secours si nécessaire
+- Maintien de l’appelant en ligne
+- Instructions téléphoniques (massage cardiaque, position latérale de sécurité, etc.)
+
+Exemple : En cas d’arrêt cardiaque, l’ARM guide le massage cardiaque avant même l’arrivée des secours.
+
+5. Conclusion
+L’ARM est un acteur clé du système d’urgence : il est à la fois filtreur, coordinateur et garant de la sécurité des patients. 
+Sans lui, le système de prise en charge des urgences serait inefficace."""
 
 analyste = Agent(
     role="Analyste Expert en Régulation SAMU",
@@ -107,16 +167,19 @@ verificateur = Agent(
 task_analyse = Task(
     description=(
         "Analyse cet appel d'urgence de manière complète et professionnelle.\n\n"
+
         "==================== TRANSCRIPTION ====================\n"
         "{transcription}\n\n"
+
         "==================== CONTEXTE RAG ====================\n"
         "{context}\n\n"
-         "==================== RÈGLES STRICTES ====================\n"
+
+        "==================== RÈGLES STRICTES ====================\n"
         "- La transcription est la SEULE source de vérité\n"
-        "- Le RAG sert UNIQUEMENT à raisonner (gravité, décision)\n"
+        "- Le RAG sert UNIQUEMENT à t'aider à raisonner sur la gravité et la décision.\n"
         "- Ne JAMAIS recopier ou mentionner le RAG\n"
         "- Ne JAMAIS écrire des exemples (P0, P1, etc.)\n"
-        "- Ne PAS inventer d'informations absentes\n\n"
+        "- Ne PAS inventer d'informations absentes de la transcription.\n\n"
 
         "==================== GUIDE VARIABLES ====================\n"
         "{VARIABLES_GUIDE}\n\n"
@@ -201,14 +264,14 @@ task_analyse = Task(
         "- Répondre STRICTEMENT dans ce format\n"
         "- Ne rien ajouter avant ou après\n"
         "- Le RAG doit être invisible dans la réponse\n"
-        "Répondre STRICTEMENT dans le format demandé."
     ),
-    expected_output="Analyse + variables complètes",
+    expected_output="Analyse + variables complètes sans pollution RAG",
     agent=analyste
 )
 
 task_verification = Task(
-    description=("Tu es un Vérificateur Médical Senior très rigoureux.\n\n"
+    description=(
+        "Tu es un Vérificateur Médical Senior très rigoureux.\n\n"
 
         "Analyse à vérifier :\n"
         "{context}\n\n"
@@ -224,28 +287,44 @@ task_verification = Task(
         "IMPORTANT :\n"
         "- Garder STRICTEMENT le même format\n"
         "- Ne rien ajouter avant ou après\n"
-        "- Ne jamais introduire de contenu RAG\n",
-            ),
+        "- Ne jamais introduire de contenu RAG\n"
+    ),
     expected_output="Analyse corrigée + variables cohérentes",
-
     agent=verificateur,
     context=[task_analyse]
 )
 
-crew = Crew(agents=[analyste, verificateur], tasks=[task_analyse, task_verification], verbose=True)
-
+crew = Crew(
+    agents=[analyste, verificateur],
+    tasks=[task_analyse, task_verification],
+    verbose=True
+)
 # ====================== SCHEMA + FONCTIONS (de ton 1er code) ======================
+# ====================== SCHEMA ARM ======================
 ARM_SCHEMA: Dict[str, Any] = {
     "Variables": {
-        "debut": None, "heure": None, "duree_min": None,
-        "departement": None, "zone": None, "commune_dest": "Non renseigné",
-        "age": None, "sexe": None, "provenance": None,
-        "motif_code": None, "motif_libelle": None,
-        "carence_smur": 0, "carence_any": 0,
-        "smur_envoye": 0, "conseil_seul": 0,
-        "moyen_medicalise": 0, "moyen_non_medicalise": 0, "medecin_proximite": 0,
-        "orientation_mru": None, "modalite_transport": None,
-        "priorite_ARM": None, "niveau_decision": None
+        "debut": None, 
+        "heure": None, 
+        "duree_min": None,
+        "departement": None, 
+        "zone": None, 
+        "commune_dest": "Non renseigné",
+        "age": None, 
+        "sexe": None, 
+        "provenance": None,
+        "motif_code": None, 
+        "motif_libelle": None,
+        "carence_smur": 0, 
+        "carence_any": 0,
+        "smur_envoye": 0, 
+        "conseil_seul": 0,
+        "moyen_medicalise": 0, 
+        "moyen_non_medicalise": 0, 
+        "medecin_proximite": 0,
+        "orientation_mru": None, 
+        "modalite_transport": None,
+        "priorite_ARM": None, 
+        "niveau_decision": None
     },
     "Raison_de_l_appel": None,
     "Resume": None,
@@ -286,62 +365,7 @@ VARIABLES_GUIDE = """Significations exactes des variables (à respecter strictem
 - modalite_transport : Modalité de transport retenue (ex: Ambulancier, SMUR, VSL, personnel, etc.)
 - niveau_decision    : Niveau de décision (ARM, MRU, etc.)
 """
-ROLE_ET_PIPELINE_ARM = """1. Le rôle de l’ARM
-L’ARM (Assistant de Régulation Médicale) est la première personne qui répond aux appels du 15. 
-Il joue un rôle essentiel dans la gestion des urgences. Il filtre les appels, sécurise la situation et prépare la décision médicale.
 
-Rôles principaux :
-- Décrocher rapidement
-- Localiser précisément l’appelant
-- Comprendre la situation
-- Évaluer l’urgence
-- Transmettre au médecin régulateur
-- Engager des moyens si nécessaire
-
-2. Le pipeline de traitement d’un appel
-
-Étape 1 : Réception
-Objectifs : rassurer l’appelant et obtenir les informations essentielles rapidement.
-Exemple : Une personne appelle pour un malaise → l’ARM demande immédiatement l’adresse exacte et le numéro de téléphone.
-
-Étape 2 : Priorisation
-Classification par l’ARM :
-- P0 : urgence vitale immédiate (ex : arrêt cardiaque, détresse respiratoire aiguë)
-- P1 : urgence grave (ex : douleur thoracique, AVC suspecté)
-- P2 : urgence relative
-- P3 : non urgent
-
-Exemple : Une personne inconsciente est classée P0 immédiatement.
-
-Étape 3 : Diagnostic médical
-Le médecin régulateur prend le relais et affine l’analyse en posant des questions ciblées sur les symptômes.
-
-Étape 4 : Décision
-- R1 : SMUR
-- R2 : Ambulance
-- R3 : Médecin de garde / proximité
-- R4 : Conseil médical seul
-
-Étape 5 : Action
-L’ARM exécute la décision : envoi des secours, coordination, suivi et maintien en ligne si nécessaire.
-
-3. Types de questions posées par l’ARM
-A. Localisation : Où êtes-vous exactement ?
-B. Identification : Qui appelle ? Quel est le numéro ?
-C. Motif : Que se passe-t-il ?
-D. Gravité : La personne est-elle consciente ? Respire-t-elle normalement ?
-E. Contexte : Antécédents médicaux ? Âge ? Traitements en cours ?
-
-4. Actions en parallèle
-- Déclenchement rapide des secours si nécessaire
-- Maintien de l’appelant en ligne
-- Instructions téléphoniques (massage cardiaque, position latérale de sécurité, etc.)
-
-Exemple : En cas d’arrêt cardiaque, l’ARM guide le massage cardiaque avant même l’arrivée des secours.
-
-5. Conclusion
-L’ARM est un acteur clé du système d’urgence : il est à la fois filtreur, coordinateur et garant de la sécurité des patients. 
-Sans lui, le système de prise en charge des urgences serait inefficace."""
 
 def extract_variables_from_llm(text: str) -> Dict[str, Any]:
     """
@@ -386,57 +410,89 @@ def extract_variables_from_llm(text: str) -> Dict[str, Any]:
                 variables[key] = value
 
     return variables
+def extract_full_analysis(text: str) -> Dict[str, Any]:
+    """Extrait les sections principales (Raison, Résumé, etc.)"""
+    analysis = {
+        "Raison_de_l_appel": None,
+        "Resume": None,
+        "Termes_medicaux": [],
+        "Patient_Famille": None,
+        "Centre_d_urgences": [],
+        "Gravite": None,
+        "Decision": None,
+        "Orientation_patient": None,
+        "Conclusion": None,
+        "Recommendations": None
+    }
 
+    sections = {
+        "Raison de l'appel": "Raison_de_l_appel",
+        "Résumé": "Resume",
+        "Termes médicaux": "Termes_medicaux",
+        "Patient / Famille": "Patient_Famille",
+        "Centre d'urgences": "Centre_d_urgences",
+        "Gravite": "Gravite",
+        "Decision": "Decision",
+        "Orientation_patient": "Orientation_patient",
+        "Conclusion": "Conclusion",
+        "Recommendations": "Recommendations"
+    }
+
+    for section_fr, key in sections.items():
+        pattern = rf"\*\*{section_fr}\s*:\*\*(.*?)(?=\*\*|\Z)"
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            value = match.group(1).strip()
+            if value and value.lower() not in ["null", "non spécifié", "aucun"]:
+                if key in ["Termes_medicaux", "Centre_d_urgences"]:
+                    analysis[key] = [v.strip() for v in value.split(",") if v.strip()]
+                else:
+                    analysis[key] = value
+
+    return analysis
 
 # ====================== POST-PROCESSING ======================
 def strict_post_processing(data: Dict[str, Any], transcription: str, audio_duration: float) -> Dict[str, Any]:
-    """
-    Post-traitement système : force les valeurs critiques et assure la cohérence
-    """
     text = transcription.lower()
     v = data["Variables"]
 
-    # 1. Durée fiable (toujours calculée par le système)
     v["duree_min"] = round(audio_duration, 2)
 
-    # 2. Age (extraction robuste en fallback)
+    # Age
     age_match = re.search(r"(\d+[.,]?\d*)\s*(ans?|an)", text)
-    if age_match and v.get("age") is None:
+    if age_match:
         v["age"] = float(age_match.group(1).replace(',', '.'))
 
-    # 3. Sexe (fallback si le LLM n'a rien mis)
+    # Sexe
     if not v.get("sexe"):
         if any(w in text for w in ["femme", "dame", "madame", "épouse", "fille", "mère", "grande-mère", "elle"]):
             v["sexe"] = "F"
         elif any(w in text for w in ["homme", "monsieur", "mari", "garçon", "père", "grand-père", "il"]):
             v["sexe"] = "M"
 
-    # 4. Date et heure système (jamais laissé au LLM)
+    # Date/heure
     now = datetime.now()
     v["debut"] = now.strftime("%Y-%m-%dT%H:%M:%S")
     v["heure"] = now.hour
 
-    # 5. Sécurité : toutes les variables doivent exister
-    default_keys = [
-        "debut", "heure", "duree_min", "age", "sexe", "provenance",
-        "motif_code", "motif_libelle", "priorite_ARM", "orientation_mru",
-        "departement", "zone", "commune_dest", "carence_smur",
-        "carence_any", "smur_envoye", "conseil_seul",
-        "moyen_medicalise", "moyen_non_medicalise",
-        "medecin_proximite", "modalite_transport", "niveau_decision"
-    ]
-    
-    for key in default_keys:
+    # Variables par défaut
+    for key in ["debut", "heure", "duree_min", "age", "sexe", "provenance", "motif_code", 
+                "motif_libelle", "priorite_ARM", "orientation_mru", "departement", "zone", 
+                "commune_dest", "modalite_transport", "niveau_decision"]:
         if key not in v or v[key] == "":
             v[key] = None
 
-    # 6. Cohérence des règles métier
+    for key in ["carence_smur", "carence_any", "smur_envoye", "conseil_seul", 
+                "moyen_medicalise", "moyen_non_medicalise", "medecin_proximite"]:
+        if key not in v or v[key] == "":
+            v[key] = 0
+
+    # Cohérence
     if v.get("priorite_ARM") in ["P0", "P1"]:
         v["orientation_mru"] = "Médecin régulateur"
         v["niveau_decision"] = "Médecin régulateur"
-        v["smur_envoye"] = 1 if v.get("smur_envoye") != 0 else v.get("smur_envoye")
-    
-    # Nettoyage supplémentaire : si conseil_seul = 1, on désactive les moyens
+        v["smur_envoye"] = 1
+
     if v.get("conseil_seul") == 1:
         v["smur_envoye"] = 0
         v["moyen_medicalise"] = 0
@@ -444,7 +500,8 @@ def strict_post_processing(data: Dict[str, Any], transcription: str, audio_durat
         v["medecin_proximite"] = 0
 
     return data
-
+# ====================== PROCESS ======================
+# ====================== PROCESS ======================
 # ====================== PROCESS ======================
 def process_audio_file(file_path: str) -> Dict:
     # Transcription
@@ -457,27 +514,39 @@ def process_audio_file(file_path: str) -> Dict:
     context = "\n\n".join([doc.page_content for doc in context_docs])
 
     # CrewAI
-    crew_result = crew.kickoff(inputs={
+    crew_output = crew.kickoff(inputs={
         "transcription": transcription,
         "context": context,
         "VARIABLES_GUIDE": VARIABLES_GUIDE,
         "ROLE_ET_PIPELINE_ARM": ROLE_ET_PIPELINE_ARM
     })
 
-    # Post-traitement
+    # Nettoyage du texte
+    final_text = str(crew_output)
+    if "Final Output:" in final_text:
+        final_text = final_text.split("Final Output:")[-1].strip()
+
+    # ====================== EXTRACTION ======================
     result_dict = deepcopy(ARM_SCHEMA)
-    llm_vars = extract_variables_from_llm(str(crew_result))
+    
+    # Extraction des variables
+    llm_vars = extract_variables_from_llm(final_text)
     result_dict["Variables"].update(llm_vars)
+
+    # Extraction des sections principales (Raison, Résumé, etc.)
+    full_analysis = extract_full_analysis(final_text)
+    result_dict.update(full_analysis)
+
+    # Post-processing
     result_dict = strict_post_processing(result_dict, transcription, duration_min)
 
     return {
         "audio": os.path.basename(file_path),
         "transcription": transcription,
         "duration_min": duration_min,
-        "crew_result": str(crew_result),
+        "crew_result": final_text,
         "ARM_Variables": result_dict
     }
-
 # ====================== API ENDPOINTS ======================
 @app.post("/process-audio", response_model=ProcessResponse)
 async def process_audio(file: UploadFile = File(...)):
