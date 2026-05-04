@@ -82,12 +82,12 @@ retriever = vectorstore.as_retriever(
 
 # ====================== LLM & AGENTS ======================
 # ====================== LLM & AGENTS ======================
-GROQ_API_KEY = "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"   # ← Colle ta clé ici
+# GROQ_API_KEY = "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"   # ← Colle ta clé ici
 
 crew_llm = LLM(
     model="groq/llama-3.3-70b-versatile",
     base_url="https://api.groq.com/openai/v1",
-    api_key=GROQ_API_KEY,
+    api_key=os.getenv('GROQ_API_KEY'),
     temperature=0.1,
 )
 ROLE_ET_PIPELINE_ARM = """1. Le rôle de l’ARM
