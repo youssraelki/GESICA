@@ -2,9 +2,9 @@ import redis
 import os
 import json
 from pathlib import Path
+from faster_whisper import WhisperModel
 
 # IMPORTS MANQUANTS
-from faster_whisper import WhisperModel
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -231,30 +231,49 @@ crew = Crew(
     verbose=True
 )
 # ====================== REDIS ======================
-r = redis.Redis.from_url(
-    os.environ["REDIS_URL"],
-    ssl=True,
-    decode_responses=True
-)
+# ====================== REDIS ======================
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
+try:
+    r = redis.Redis.from_url(
+        REDIS_URL,
+        ssl=REDIS_URL.startswith("rediss://"),
+        decode_responses=True
+    )
+    r.ping()
+    print("✅ Redis connecté")
+except Exception as e:
+    print(f"❌ Redis indisponible: {e}")
+    exit(1)  # le worker doit s'arrêter si Redis KO
 print("✅ Worker lancé...")
 
 # ====================== LOOP ======================
+print("🔁 Worker en attente de jobs...")
+
 while True:
     job = r.brpop("audio_queue")
 
     if not job:
         continue
 
-    try:
-        data = json.loads(job[1])
+    job_id = None
+    file_path = None
 
-        job_id = data["job_id"]
-        file_path = data["file_path"]
+    try:
+        # job = (queue_name, payload)
+        _, payload = job
+
+        data = json.loads(payload)
+
+        job_id = data.get("job_id")
+        file_path = data.get("file_path")
+
+        if not job_id or not file_path:
+            raise ValueError("job_id ou file_path manquant")
 
         print(f"🎯 Traitement job {job_id}")
 
-        # ✅ CORRECTION MAJEURE ICI
+        # ====================== PROCESS ======================
         result = process_audio_file(
             file_path,
             whisper_model,
@@ -262,22 +281,31 @@ while True:
             crew
         )
 
+        # ====================== SAVE RESULT ======================
         r.set(f"result:{job_id}", json.dumps(result))
 
-        print(f"✅ Terminé {job_id}")
+        print(f"✅ Job terminé {job_id}")
 
     except Exception as e:
-        print(f"❌ Erreur: {e}")
+        print(f"❌ Erreur job {job_id}: {e}")
 
-        try:
-            r.set(f"result:{job_id}", json.dumps({
-                "error": str(e)
-            }))
-        except:
-            pass
+        if job_id:
+            try:
+                r.set(
+                    f"result:{job_id}",
+                    json.dumps({
+                        "status": "error",
+                        "message": str(e)
+                    })
+                )
+            except Exception as redis_error:
+                print(f"❌ Erreur Redis: {redis_error}")
 
     finally:
-        try:
-            Path(file_path).unlink(missing_ok=True)
-        except:
-            pass
+        # ====================== CLEAN FILE ======================
+        if file_path:
+            try:
+                Path(file_path).unlink(missing_ok=True)
+                print(f"🧹 Fichier supprimé: {file_path}")
+            except Exception as cleanup_error:
+                print(f"⚠️ Erreur suppression fichier: {cleanup_error}")

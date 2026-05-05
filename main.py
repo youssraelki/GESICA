@@ -291,7 +291,9 @@ def process_audio_file(file_path: str, whisper_model, retriever, crew) -> Dict:
         "ROLE_ET_PIPELINE_ARM": ROLE_ET_PIPELINE_ARM
     })
 
-    final_text = str(crew_output).split("Final Output:")[-1].strip()
+    final_text = str(crew_output)
+    if "Final Output:" in final_text:
+    final_text = final_text.split("Final Output:")[-1].strip()
 
     result_dict = deepcopy(ARM_SCHEMA)
 
@@ -309,12 +311,20 @@ def process_audio_file(file_path: str, whisper_model, retriever, crew) -> Dict:
     }
 
 # ====================== REDIS ======================
-REDIS_URL = os.environ.get("REDIS_URL")
-if not REDIS_URL:
-    raise Exception("REDIS_URL manquant")
+# ====================== REDIS ======================
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
-r = redis.Redis.from_url(REDIS_URL, ssl=True, decode_responses=True)
-
+try:
+    r = redis.Redis.from_url(
+        REDIS_URL,
+        ssl=REDIS_URL.startswith("rediss://"),
+        decode_responses=True
+    )
+    r.ping()
+    print("✅ Redis connecté")
+except Exception as e:
+    print(f"⚠️ Redis indisponible: {e}")
+    r = None
 # ====================== API ======================
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
@@ -326,6 +336,9 @@ async def process_audio(file: UploadFile = File(...)):
 
     if len(content) > 15 * 1024 * 1024:
         raise HTTPException(400, "Fichier trop volumineux")
+
+    if r is None:
+        raise HTTPException(500, "Redis non disponible")
 
     temp_dir = Path("temp")
     temp_dir.mkdir(exist_ok=True)
