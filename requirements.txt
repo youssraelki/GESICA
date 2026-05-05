@@ -17,3 +17,4 @@ pypdf
 
 numpy
 torch
+redis

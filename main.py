@@ -12,6 +12,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
 from faster_whisper import WhisperModel
+import redis
+import uuid
 
 # LangChain
 from langchain_community.document_loaders import PyPDFDirectoryLoader
@@ -547,37 +549,65 @@ def process_audio_file(file_path: str) -> Dict:
         "ARM_Variables": result_dict
     }
 # ====================== API ENDPOINTS ======================
-@app.post("/process-audio", response_model=ProcessResponse)
+
+# connexion Redis (Railway injecte REDIS_URL)
+r = redis.Redis.from_url(
+    os.environ["REDIS_URL"],
+    ssl=True,
+    decode_responses=True
+)
+
+
+@app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
-    
+
     if not file.filename.lower().endswith((".wav", ".mp3", ".m4a")):
-        raise HTTPException(400, "Seuls les fichiers audio .wav, .mp3, .m4a sont acceptés")
+        raise HTTPException(400, "Seuls les fichiers audio sont acceptés")
 
     content = await file.read()
-    if len(content) > 15 * 1024 * 1024:   # 15 MB
+
+    if len(content) > 15 * 1024 * 1024:
         raise HTTPException(400, "Fichier trop volumineux (max 15MB)")
 
-    # Sauvegarde temporaire
+    # dossier temporaire
     temp_dir = Path("temp")
     temp_dir.mkdir(exist_ok=True)
-    temp_path = temp_dir / file.filename
 
-    try:
-        with open(temp_path, "wb") as f:
-            f.write(content)
+    job_id = str(uuid.uuid4())
+    temp_path = temp_dir / f"{job_id}_{file.filename}"
 
-        result = process_audio_file(str(temp_path))
-        return result
+    with open(temp_path, "wb") as f:
+        f.write(content)
 
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
+    # envoyer le job dans Redis
+    job_data = {
+        "job_id": job_id,
+        "file_path": str(temp_path)
+    }
+
+    r.lpush("audio_queue", json.dumps(job_data))
+
+    return {
+        "message": "job lancé",
+        "job_id": job_id
+    }
+
+
+@app.get("/result/{job_id}")
+def get_result(job_id: str):
+    data = r.get(f"result:{job_id}")
+
+    if not data:
+        return {"status": "processing"}
+
+    return json.loads(data)
+
 
 @app.get("/health")
 async def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# ====================== LANCEMENT ======================
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
